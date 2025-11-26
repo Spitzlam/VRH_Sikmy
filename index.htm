@@ -8,7 +8,6 @@
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;display:flex;gap:20px;padding:20px}
     .panel{width:340px}
     label{display:block;margin-top:10px}
-    input[type=range]{width:100%}
     canvas{background:#f8f9fb;border:1px solid #ddd}
     .values{margin-top:10px}
     button{margin-top:12px;padding:8px 12px;border-radius:8px}
@@ -18,232 +17,189 @@
 <body>
   <div class="panel">
     <h2>VRHY — vizualizace</h2>
-    <div>
-      <label>Rychlost v (m/s)
-        <input id="v" type="number" value="30" min="0" step="0.1">
-      </label>
-      <label>Úhel θ (stupně)
-        <input id="theta" type="number" value="35" min="0" max="89.9" step="0.1">
-      </label>
-      <label>Počáteční výška h (m)
-        <input id="h" type="number" value="1.5" min="-100" step="0.1">
-      </label>
-      <label>Gravitace g (m/s²)
-        <input id="g" type="number" value="9.81" min="0.1" step="0.01">
-      </label>
 
-      <div style="display:flex;gap:8px">
-        <button id="drawBtn">Vykreslit trajektorii</button>
-        <button id="optBtn">Najít úhel pro max vzdálenost</button>
-        <button id="resetBtn">Reset</button>
-      </div>
+    <label>Rychlost v (m/s)
+      <input id="v" type="number" value="30" min="0" step="0.1">
+    </label>
+    <label>Úhel θ (stupně)
+      <input id="theta" type="number" value="35" min="0" max="89.9" step="0.1">
+    </label>
+    <label>Počáteční výška h (m)
+      <input id="h" type="number" value="1.5" min="-100" step="0.1">
+    </label>
+    <label>Gravitace g (m/s²)
+      <input id="g" type="number" value="9.81" min="0.1" step="0.01">
+    </label>
 
-      <div class="values">
-        <div>Max výška: <span id="ymax">—</span> m</div>
-        <div>Dopad (vzdálenost): <span id="range">—</span> m</div>
-        <div>Čas letu: <span id="tflight">—</span> s</div>
-        <div>Optimální úhel: <span id="thetaOpt">—</span> °</div>
-      </div>
+    <button id="drawBtn">Vykreslit šikmý vrh</button>
+    <button id="optBtn">Najít optimální úhel</button>
+    <button id="verticalBtn">Vykreslit svislý vrh</button>
+    <button id="resetBtn">Reset</button>
 
-      <p class="small">Použité vzorce: y(t)=h+v·sinθ·t - 0.5·g·t², x(t)=v·cosθ·t. Maximální výška: h + (v·sinθ)²/(2g). Pro dopad se řeší kořen y(t)=0.</p>
+    <div class="values">
+      <div>Max výška: <span id="ymax">—</span> m</div>
+      <div>Dopad (vzdálenost): <span id="range">—</span> m</div>
+      <div>Čas letu: <span id="tflight">—</span> s</div>
+      <div>Optimální úhel: <span id="thetaOpt">—</span> °</div>
     </div>
+    <p class="small">Měřítko: mřížka po 5 metrech</p>
   </div>
 
   <div>
     <canvas id="c" width="820" height="480"></canvas>
-    <div class="small" style="margin-top:6px">Nakreslete trajektorii, přibližné měřítko (1 pixel ≈ 0.2 m). Klikni na "Najít úhel" pro zobrazení trajektorie při optimálním úhlu.</div>
   </div>
 
 <script>
-// Utility: stupně <-> radiány
-const toRad = deg => deg * Math.PI/180;
-const toDeg = rad => rad * 180/Math.PI;
+const toRad = d => d*Math.PI/180;
+const toDeg = r => r*180/Math.PI;
 
-function computeFlightTime(v, theta, h, g){
-  // řešení kvadratické: -0.5 g t^2 + v sinθ t + h = 0
-  const a = -0.5 * g;
-  const b = v * Math.sin(theta);
-  const c = h;
-  const disc = b*b - 4*a*c; // note a<0 so discriminant always b^2 + 2gh
-  if(disc < 0) return null;
-  const t1 = (-b + Math.sqrt(disc)) / (2*a);
-  const t2 = (-b - Math.sqrt(disc)) / (2*a);
-  const t = Math.max(t1,t2);
-  return t>0 ? t : null;
+function computeFlightTime(v,th,h,g){
+  const a=-0.5*g,b=v*Math.sin(th),c=h;
+  const D=b*b-4*a*c; if(D<0)return null;
+  const t1=(-b+Math.sqrt(D))/(2*a);
+  const t2=(-b-Math.sqrt(D))/(2*a);
+  return Math.max(t1,t2);
 }
 
-function computeRange(v, theta, h, g){
-  const t = computeFlightTime(v,theta,h,g);
-  if(t === null) return null;
-  return v * Math.cos(theta) * t;
+function computeMaxHeight(v,th,h,g){const vy=v*Math.sin(th);return h+vy*vy/(2*g);} 
+function computeRange(v,th,h,g){const t=computeFlightTime(v,th,h,g);return t?v*Math.cos(th)*t:0;}
+
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+const PX_PER_M = 5;
+const GRID_STEP_M = 5;
+
+function clearCanvas(){ctx.clearRect(0,0,canvas.width,canvas.height);}
+
+function drawGrid(maxX,maxY){
+  ctx.save(); ctx.translate(0,canvas.height); ctx.scale(1,-1);
+  ctx.strokeStyle='#ddd'; ctx.lineWidth=1;
+
+  for(let x=0;x<=maxX;x+=GRID_STEP_M){
+    ctx.beginPath();
+    ctx.moveTo(x*PX_PER_M,0);
+    ctx.lineTo(x*PX_PER_M,maxY*PX_PER_M);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
-function computeMaxHeight(v,theta,h,g){
-  const vy = v * Math.sin(theta);
-  return h + vy*vy/(2*g);
-}
+function drawTrajectoryFull(v,thetaDeg,h,g,opt={color:'#0074D9'}){
+  const th = toRad(thetaDeg);
+  const tF = computeFlightTime(v,th,h,g);
+  const pts=[]; let xmax=0,ymax=0;
 
-// draw trajectory on canvas
-const canvas = document.getElementById('c');
-const ctx = canvas.getContext('2d');
-function drawTrajectory(v, thetaDeg, h, g, opts={color:'black',label:''}){
-  const theta = toRad(thetaDeg);
-  const tFlight = computeFlightTime(v,theta,h,g);
-  if(tFlight === null) return null;
-  const steps = 300;
-  const pts = [];
-  let xmax = 0, ymax = 0;
-  for(let i=0;i<=steps;i++){
-    const t = tFlight * i/steps;
-    const x = v*Math.cos(theta)*t;
-    const y = h + v*Math.sin(theta)*t - 0.5*g*t*t;
-    if(y < 0) { pts.push([x,0]); break; }
+  for(let i=0;i<=500;i++){
+    const t=tF*i/500;
+    let x=v*Math.cos(th)*t;
+    let y=h+v*Math.sin(th)*t-0.5*g*t*t;
+    if(y<0) y=0;
     pts.push([x,y]);
-    if(x > xmax) xmax = x;
-    if(y > ymax) ymax = y;
+    if(x>xmax)xmax=x;
+    if(y>ymax)ymax=y;
   }
 
-  // scaling: choose px per meter so trajectory fits
-  const margin = 30;
-  const pxPerM_x = (canvas.width - margin*2) / Math.max(1, xmax);
-  const pxPerM_y = (canvas.height - margin*2) / Math.max(1, ymax+1);
-  const px = Math.min(pxPerM_x, pxPerM_y);
+  ctx.save(); ctx.translate(0,canvas.height); ctx.scale(1,-1);
+  ctx.beginPath(); ctx.lineWidth=3; ctx.strokeStyle=opt.color;
 
-  // draw axis
-  ctx.save();
-  ctx.translate(margin, canvas.height - margin);
-  ctx.scale(1,-1);
-
-  // axes lines (inverted y)
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = '#bbb';
-  // x axis
-  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(canvas.width,0); ctx.stroke();
-  // grid horizontal
-  for(let i=0;i<Math.ceil((canvas.width-2*margin)/px);i++){
-    const gx = i*px;
-    ctx.beginPath(); ctx.moveTo(gx,0); ctx.lineTo(gx, (canvas.height-2*margin)); ctx.stroke();
-  }
-
-  // draw curve
-  ctx.beginPath();
-  for(let i=0;i<pts.length;i++){
-    const [x,y] = pts[i];
-    const X = x*px;
-    const Y = y*px;
+  pts.forEach(([x,y],i)=>{
+    const X=x*PX_PER_M, Y=y*PX_PER_M;
     if(i===0) ctx.moveTo(X,Y);
     else ctx.lineTo(X,Y);
-  }
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = opts.color || 'black';
-  ctx.stroke();
+  });
 
-  // label
-  ctx.save(); ctx.scale(1,-1); // reset so text isn't inverted
-  ctx.restore();
-  ctx.restore();
-
-  return {xmax,ymax,px};
+  ctx.stroke(); ctx.restore();
+  return {xmax,ymax};
 }
 
-function clearCanvas(){
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  // background
-  ctx.fillStyle = '#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+function render(){
+  const v=parseFloat(vEl.value);
+  const th=parseFloat(thetaEl.value);
+  const h=parseFloat(hEl.value);
+  const g=parseFloat(gEl.value);
+
+  clearCanvas();
+  const r = drawTrajectoryFull(v,th,h,g);
+  drawGrid(r.xmax,r.ymax);
+  drawTrajectoryFull(v,th,h,g);
+
+  ymaxEl.textContent = computeMaxHeight(v,toRad(th),h,g).toFixed(2);
+  rangeEl.textContent = computeRange(v,toRad(th),h,g).toFixed(2);
+  tflightEl.textContent = computeFlightTime(v,toRad(th),h,g).toFixed(2);
 }
 
-// Find angle maximizing range using golden-section search
-function maximizeAngle(v, h, g){
-  // search in radians between 0 and pi/2
-  let a = 1e-6, b = Math.PI/2 - 1e-6;
-  const gr = (Math.sqrt(5)-1)/2; // 0.618
-  let x1 = b - gr*(b-a);
-  let x2 = a + gr*(b-a);
-  let f1 = computeRange(v,x1,h,g) || 0;
-  let f2 = computeRange(v,x2,h,g) || 0;
+function maximizeAngle(v,h,g){
+  let a=1e-6,b=Math.PI/2-1e-6;
   for(let i=0;i<80;i++){
-    if(f1 < f2){
-      a = x1;
-      x1 = x2;
-      f1 = f2;
-      x2 = a + gr*(b-a);
-      f2 = computeRange(v,x2,h,g) || 0;
-    } else {
-      b = x2;
-      x2 = x1;
-      f2 = f1;
-      x1 = b - gr*(b-a);
-      f1 = computeRange(v,x1,h,g) || 0;
-    }
+    const m=(a+b)/2;
+    const left=computeRange(v,a,h,g);
+    const mid=computeRange(v,m,h,g);
+    if(mid>left) a=m; else b=m;
   }
-  const thetaOpt = (a+b)/2;
-  return {theta: thetaOpt, range: computeRange(v,thetaOpt,h,g)};
+  return (a+b)/2;
 }
 
-// UI handlers
-const vEl = document.getElementById('v');
-const thetaEl = document.getElementById('theta');
-const hEl = document.getElementById('h');
-const gEl = document.getElementById('g');
-const drawBtn = document.getElementById('drawBtn');
-const optBtn = document.getElementById('optBtn');
-const resetBtn = document.getElementById('resetBtn');
-const ymaxEl = document.getElementById('ymax');
-const rangeEl = document.getElementById('range');
-const tflightEl = document.getElementById('tflight');
-const thetaOptEl = document.getElementById('thetaOpt');
+document.getElementById('optBtn').onclick = ()=>{
+  const v=parseFloat(vEl.value),h=parseFloat(hEl.value),g=parseFloat(gEl.value);
+  const thOpt = toDeg(maximizeAngle(v,h,g));
+  thetaOptEl.textContent = thOpt.toFixed(2);
 
-function render(angleToShow=null){
-  const v = parseFloat(vEl.value);
-  const thetaDeg = angleToShow !== null ? angleToShow : parseFloat(thetaEl.value);
-  const h = parseFloat(hEl.value);
-  const g = parseFloat(gEl.value);
   clearCanvas();
-  // draw base ground line
-  ctx.fillStyle = '#eef'; ctx.fillRect(0, canvas.height-30, canvas.width, 30);
+  const r = drawTrajectoryFull(v,thOpt,h,g,{color:'#FF4136'});
+  drawGrid(r.xmax,r.ymax);
+  drawTrajectoryFull(v,thOpt,h,g,{color:'#FF4136'});
 
-  const theta = toRad(thetaDeg);
-  const tFlight = computeFlightTime(v,theta,h,g);
-  if(tFlight === null){
-    ymaxEl.textContent = 'neexistuje (není zásah země)';
-    rangeEl.textContent = '—';
-    tflightEl.textContent = '—';
-    return;
+  ymaxEl.textContent = computeMaxHeight(v,toRad(thOpt),h,g).toFixed(2);
+  rangeEl.textContent = computeRange(v,toRad(thOpt),h,g).toFixed(2);
+  tflightEl.textContent = computeFlightTime(v,toRad(thOpt),h,g).toFixed(2);
+};
+
+document.getElementById('verticalBtn').onclick = () => {
+  const v=parseFloat(vEl.value);
+  const h=parseFloat(hEl.value);
+  const g=parseFloat(gEl.value);
+
+  clearCanvas();
+
+  const tTop=v/g;
+  const tTotal=tTop*2;
+  const pts=[];
+  let maxY=0;
+
+  for(let i=0;i<=500;i++){
+    const t=tTotal*i/500;
+    let y=h+v*t-0.5*g*t*t;
+    if(y<0) y=0;
+    pts.push([t,y]);
+    if(y>maxY) maxY=y;
   }
-  const R = computeRange(v,theta,h,g);
-  const Ymax = computeMaxHeight(v,theta,h,g);
-  const drawInfo = drawTrajectory(v,thetaDeg,h,g,{color: angleToShow===null ? '#0074D9' : '#FF4136'});
 
-  ymaxEl.textContent = Ymax.toFixed(3);
-  rangeEl.textContent = R.toFixed(3);
-  tflightEl.textContent = tFlight.toFixed(3);
-}
+  drawGrid(tTotal*8,maxY);
 
-drawBtn.addEventListener('click', ()=> render());
-optBtn.addEventListener('click', ()=>{
-  const v = parseFloat(vEl.value);
-  const h = parseFloat(hEl.value);
-  const g = parseFloat(gEl.value);
-  const opt = maximizeAngle(v,h,g);
-  const thetaDeg = toDeg(opt.theta);
-  thetaOptEl.textContent = thetaDeg.toFixed(3);
-  // show both trajectories: original and optimal
-  clearCanvas();
-  drawTrajectory(v, parseFloat(thetaEl.value), h, g, {color:'#0074D9'});
-  drawTrajectory(v, thetaDeg, h, g, {color:'#FF4136'});
-  // update numeric values for optimal
-  const tFlights = computeFlightTime(v,opt.theta,h,g);
-  document.getElementById('ymax').textContent = computeMaxHeight(v,opt.theta,h,g).toFixed(3);
-  document.getElementById('range').textContent = (opt.range||0).toFixed(3);
-  document.getElementById('tflight').textContent = (tFlights||0).toFixed(3);
-});
-resetBtn.addEventListener('click', ()=>{
-  vEl.value = 30; thetaEl.value = 35; hEl.value = 1.5; gEl.value = 9.81; thetaOptEl.textContent = '—'; clearCanvas();
-});
+  ctx.save(); ctx.translate(0,canvas.height); ctx.scale(1,-1);
+  ctx.beginPath(); ctx.lineWidth=3; ctx.strokeStyle='#AA00FF';
 
-// initial draw
-render();
+  pts.forEach(([t,y],i)=>{
+    const X=t*80;
+    const Y=y*PX_PER_M;
+    if(i===0) ctx.moveTo(X,Y);
+    else ctx.lineTo(X,Y);
+  });
 
+  ctx.stroke(); ctx.restore();
+
+  ymaxEl.textContent = (v*v/(2*g)+h).toFixed(2);
+  rangeEl.textContent = "0";
+  tflightEl.textContent = tTotal.toFixed(2);
+  thetaOptEl.textContent = "—";
+};
+
+const vEl=document.getElementById('v');
+const thetaEl=document.getElementById('theta');
+const hEl=document.getElementById('h');
+const gEl=document.getElementById('g');
+const ymaxEl=document.getElementById('ymax');
+const rangeEl=document.getElementById
 </script>
 </body>
 </html>

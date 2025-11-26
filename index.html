@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>VRHY — vizualizace</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;display:flex;gap:20px;padding:20px}
+    .panel{width:340px}
+    label{display:block;margin-top:10px}
+    input[type=number]{width:100%}
+    canvas{background:#f8f9fb;border:1px solid #ddd}
+    .values{margin-top:10px}
+    button{margin-top:12px;padding:8px 12px;border-radius:8px}
+    .small{font-size:90%;color:#444}
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <h2>VRHY — vizualizace</h2>
+
+    <label>Rychlost v (m/s)
+      <input id="v" type="number" value="30" min="0" step="0.1">
+    </label>
+    <label>Úhel θ (stupně)
+      <input id="theta" type="number" value="35" min="0" max="89.9" step="0.1">
+    </label>
+    <label>Počáteční výška h (m)
+      <input id="h" type="number" value="1.5" min="-100" step="0.1">
+    </label>
+    <label>Gravitace g (m/s²)
+      <input id="g" type="number" value="9.81" min="0.1" step="0.01">
+    </label>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button id="drawBtn">Vykreslit šikmý vrh</button>
+      <button id="optBtn">Najít optimální úhel</button>
+      <button id="verticalBtn">Vykreslit svislý vrh</button>
+      <button id="resetBtn">Reset</button>
+    </div>
+
+    <div class="values">
+      <div>Max výška: <span id="ymax">—</span> m</div>
+      <div>Dopad (vzdálenost): <span id="range">—</span> m</div>
+      <div>Čas letu: <span id="tflight">—</span> s</div>
+      <div>Optimální úhel: <span id="thetaOpt">—</span> °</div>
+    </div>
+
+    <p class="small">Měřítko: mřížka po 5 metrech (px/m se přizpůsobí tak, aby to vešlo do plátna).</p>
+  </div>
+
+  <div>
+    <canvas id="c" width="820" height="480"></canvas>
+    <div class="small" style="margin-top:6px">Nakreslete trajektorii, přibližné měřítko. Klikni na "Najít úhel" pro zobrazení trajektorie při optimálním úhlu.</div>
+  </div>
+
+<script>
+/* utility */
+const toRad = d => d * Math.PI/180;
+const toDeg = r => r * 180/Math.PI;
+
+/* physics */
+function computeFlightTime(v, th, h, g) {
+  // řešení kvadratické: -0.5 g t^2 + v sinθ t + h = 0
+  const a = -0.5 * g;
+  const b = v * Math.sin(th);
+  const c = h;
+  const D = b*b - 4*a*c;
+  if (D < 0) return null;
+  const t1 = (-b + Math.sqrt(D)) / (2*a);
+  const t2 = (-b - Math.sqrt(D)) / (2*a);
+  const t = Math.max(t1, t2);
+  return t > 0 ? t : null;
+}
+function computeRange(v,th,h,g){
+  const t = computeFlightTime(v,th,h,g);
+  return t ? v * Math.cos(th) * t : 0;
+}
+function computeMaxHeight(v,th,h,g){
+  const vy = v * Math.sin(th);
+  return h + vy*vy/(2*g);
+}
+
+/* canvas setup */
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const BASE_PX_PER_M = 5;   // základní velikost (5 px/m)
+const GRID_STEP_M = 5;     // grid po 5 metrech
+const MARGIN = 24;         // v pixelech
+
+function clearCanvas(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+}
+
+/* připravení bodů (ne kreslení) pro šikmý vrh */
+function sampleTrajectoryPoints(v, thetaDeg, h, g, steps=500){
+  const theta = toRad(thetaDeg);
+  const tFlight = computeFlightTime(v, theta, h, g);
+  if (!tFlight) return {pts:[], xmax:0, ymax:0, tFlight:null};
+  const pts = [];
+  let xmax = 0, ymax = 0;
+  for(let i=0;i<=steps;i++){
+    const t = tFlight * i/steps;
+    let x = v * Math.cos(theta) * t;
+    let y = h + v * Math.sin(theta) * t - 0.5 * g * t * t;
+    if (y < 0) y = 0; // dopad na zem
+    pts.push([x,y]);
+    if (x > xmax) xmax = x;
+    if (y > ymax) ymax = y;
+  }
+  return {pts, xmax, ymax, tFlight};
+}
+
+/* kreslí grid podle pxPerM a rozsahu */
+function drawGrid(pxPerM, maxX, maxY){
+  ctx.save();
+  ctx.translate(MARGIN, canvas.height - MARGIN);
+  ctx.scale(1, -1);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#ddd';
+
+  // vertikální čáry každých GRID_STEP_M
+  const lastX = Math.ceil(maxX / GRID_STEP_M) * GRID_STEP_M;
+  for(let xm = 0; xm <= lastX; xm += GRID_STEP_M){
+    const gx = xm * pxPerM;
+    ctx.beginPath();
+    ctx.moveTo(gx, 0);
+    ctx.lineTo(gx, (maxY + GRID_STEP_M) * pxPerM);
+    ctx.stroke();
+  }
+
+  // x-axis baseline
+  ctx.beginPath();
+  ctx.strokeStyle = '#ccc';
+  ctx.moveTo(0,0);
+  ctx.lineTo((lastX+GRID_STEP_M) * pxPerM, 0);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+/* vykreslí body podle scale */
+function drawPoints(pxPerM, pts, color='#0074D9'){
+  if (!pts || pts.length===0) return;
+  ctx.save();
+  ctx.translate(MARGIN, canvas.height - MARGIN);
+  ctx.scale(1, -1);
+
+  ctx.beginPath();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = color;
+  for(let i=0;i<pts.length;i++){
+    const [x,y] = pts[i];
+    const X = x * pxPerM;
+    const Y = y * pxPerM;
+    if (i===0) ctx.moveTo(X, Y);
+    else ctx.lineTo(X, Y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* hlavní kreslení šikmého vrhu */
+function drawTrajectory(v, thetaDeg, h, g, opts={color:'#0074D9'}){
+  const sample = sampleTrajectoryPoints(v,thetaDeg,h,g,600);
+  if (!sample.tFlight) return null;
+
+  // spočítat pxPerM tak, aby to vešlo, ale preferovat BASE_PX_PER_M
+  const availableW = canvas.width - 2*MARGIN;
+  const availableH = canvas.height - 2*MARGIN;
+  let pxPerM = BASE_PX_PER_M;
+  // fit scale if overflow
+  if (sample.xmax * pxPerM > availableW || sample.ymax * pxPerM > availableH){
+    const fitX = availableW / (sample.xmax || 1);
+    const fitY = availableH / (sample.ymax || 1);
+    pxPerM = Math.min(pxPerM, fitX, fitY);
+    // if pxPerM becomes too small, clamp to a very small positive number
+    if (pxPerM < 0.5) pxPerM = Math.min(fitX, fitY);
+  }
+
+  // vykreslit grid a body
+  drawGrid(pxPerM, sample.xmax, sample.ymax);
+  drawPoints(pxPerM, sample.pts, opts.color);
+
+  return {pxPerM, sample};
+}
+
+/* find optimal angle (golden-section-ish) */
+function maximizeAngle(v,h,g){
+  let a = 1e-6, b = Math.PI/2 - 1e-6;
+  for(let i=0;i<80;i++){
+    const m = (a+b)/2;
+    const left = computeRange(v,a,h,g);
+    const mid = computeRange(v,m,h,g);
+    if (mid > left) a = m; else b = m;
+  }
+  return (a+b)/2;
+}
+
+/* UI elements */
+const vEl = document.getElementById('v');
+const thetaEl = document.getElementById('theta');
+const hEl = document.getElementById('h');
+const gEl = document.getElementById('g');
+const drawBtn = document.getElementById('drawBtn');
+const optBtn = document.getElementById('optBtn');
+const verticalBtn = document.getElementById('verticalBtn');
+const resetBtn = document.getElementById('resetBtn');
+
+const ymaxEl = document.getElementById('ymax');
+const rangeEl = document.getElementById('range');
+const tflightEl = document.getElementById('tflight');
+const thetaOptEl = document.getElementById('thetaOpt') || (()=>{ 
+  // create if not present (defensive)
+  const sp = document.createElement('span'); sp.id='thetaOpt'; sp.textContent='—';
+  document.querySelector('.values').appendChild(sp); return sp;
+})();
+
+function renderSlanted(){
+  const v = parseFloat(vEl.value);
+  const thDeg = parseFloat(thetaEl.value);
+  const h = parseFloat(hEl.value);
+  const g = parseFloat(gEl.value);
+
+  clearCanvas();
+  const result = drawTrajectory(v, thDeg, h, g, {color:'#0074D9'});
+  if (!result) {
+    ymaxEl.textContent = '—';
+    rangeEl.textContent = '—';
+    tflightEl.textContent = '—';
+    return;
+  }
+  const tFlight = computeFlightTime(v, toRad(thDeg), h, g);
+  ymaxEl.textContent = computeMaxHeight(v, toRad(thDeg), h, g).toFixed(3);
+  rangeEl.textContent = computeRange(v, toRad(thDeg), h, g).toFixed(3);
+  tflightEl.textContent = tFlight ? tFlight.toFixed(3) : '—';
+}
+
+drawBtn.addEventListener('click', renderSlanted);
+
+optBtn.addEventListener('click', ()=>{
+  const v = parseFloat(vEl.value);
+  const h = parseFloat(hEl.value);
+  const g = parseFloat(gEl.value);
+  const thetaOptRad = maximizeAngle(v,h,g);
+  const thetaOptDeg = toDeg(thetaOptRad);
+
+  clearCanvas();
+  // draw original in blue and optimal in red, using consistent pxPerM
+  const baseSample = sampleTrajectoryPoints(v, parseFloat(thetaEl.value), h, g, 600);
+  const optSample = sampleTrajectoryPoints(v, thetaOptDeg, h, g, 600);
+  const maxX = Math.max(baseSample.xmax, optSample.xmax);
+  const maxY = Math.max(baseSample.ymax, optSample.ymax);
+
+  // compute pxPerM similar to drawTrajectory logic
+  const availableW = canvas.width - 2*MARGIN;
+  const availableH = canvas.height - 2*MARGIN;
+  let pxPerM = BASE_PX_PER_M;
+  if (maxX * pxPerM > availableW || maxY * pxPerM > availableH){
+    const fitX = availableW / (maxX || 1);
+    const fitY = availableH / (maxY || 1);
+    pxPerM = Math.min(pxPerM, fitX, fitY);
+    if (pxPerM < 0.5) pxPerM = Math.min(fitX, fitY);
+  }
+
+  drawGrid(pxPerM, maxX, maxY);
+  drawPoints(pxPerM, baseSample.pts, '#0074D9');
+  drawPoints(pxPerM, optSample.pts, '#FF4136');
+
+  thetaOptEl.textContent = thetaOptDeg.toFixed(3);
+  ymaxEl.textContent = computeMaxHeight(v, thetaOptRad, h, g).toFixed(3);
+  rangeEl.textContent = computeRange(v, thetaOptRad, h, g).toFixed(3);
+  tflightEl.textContent = computeFlightTime(v, thetaOptRad, h, g).toFixed(3);
+});
+
+verticalBtn.addEventListener('click', ()=>{
+  // vykreslí y(t) proti času (aby byla vidět celá parabola)
+  const v = parseFloat(vEl.value);
+  const h = parseFloat(hEl.value);
+  const g = parseFloat(gEl.value);
+
+  clearCanvas();
+
+  const tTop = v / g;
+  const tTotal = tTop * 2;
+  const steps = 600;
+  const pts = [];
+  let maxY = 0;
+  for(let i=0;i<=steps;i++){
+    const t = tTotal * i/steps;
+    let y = h + v*t - 0.5*g*t*t;
+    if (y < 0) y = 0;
+    pts.push([t, y]);
+    if (y > maxY) maxY = y;
+  }
+
+  // X scale = pixels per second (auto fit)
+  const availableW = canvas.width - 2*MARGIN;
+  const pxPerS = Math.min(80, availableW / (tTotal || 1)); // max 80 px/s default
+  const availableH = canvas.height - 2*MARGIN;
+  let pxPerM = BASE_PX_PER_M;
+  if (maxY * pxPerM > availableH) {
+    pxPerM = availableH / (maxY || 1);
+  }
+
+  // draw vertical grid (reuse drawGrid but we need different args)
+  // we'll draw vertical lines for each 5m as before using pxPerM,
+  // and we'll draw horizontal base line/time axis using pxPerS scaling
+  ctx.save();
+  ctx.translate(MARGIN, canvas.height - MARGIN);
+  ctx.scale(1, -1);
+  // vertical grid lines
+  ctx.strokeStyle = '#ddd';
+  for(let xm = 0; xm <= Math.ceil(maxY/GRID_STEP_M)*GRID_STEP_M; xm += GRID_STEP_M){
+    const gx = xm * pxPerM;
+    ctx.beginPath();
+    ctx.moveTo(gx, 0);
+    ctx.lineTo(gx, (maxY + GRID_STEP_M) * pxPerM);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // draw parabola: X = t * pxPerS, Y = y * pxPerM
+  ctx.save();
+  ctx.translate(MARGIN, canvas.height - MARGIN);
+  ctx.scale(1, -1);
+  ctx.beginPath();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#AA00FF';
+  for(let i=0;i<pts.length;i++){
+    const [t,y] = pts[i];
+    const X = t * pxPerS;
+    const Y = y * pxPerM;
+    if (i===0) ctx.moveTo(X,Y);
+    else ctx.lineTo(X,Y);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  ymaxEl.textContent = (h + v*v/(2*g)).toFixed(3);
+  rangeEl.textContent = '0';
+  tflightEl.textContent = tTotal.toFixed(3);
+  thetaOptEl.textContent = '—';
+});
+
+resetBtn.addEventListener('click', ()=>{
+  vEl.value = 30; thetaEl.value = 35; hEl.value = 1.5; gEl.value = 9.81;
+  thetaOptEl.textContent = '—';
+  ymaxEl.textContent = '—';
+  rangeEl.textContent = '—';
+  tflightEl.textContent = '—';
+  clearCanvas();
+});
+
+
+// initial draw
+renderSlanted();
+
+</script>
+</body>
+</html>
